@@ -1,100 +1,160 @@
-# AI_project
+# Raspberry Pi Object Detection — Canon 1300D + YOLOv8
 
-# Raspberry Pi Object Detection with Canon 1300D
+Tethered capture from a Canon EOS 1300D on a headless Raspberry Pi, with YOLOv8n object
+detection drawn onto every shot.
 
-Captures images using a Canon 1300D on a Raspberry Pi and performs object detection with YOLOv8. Saves original (`image_*.jpg`) and detected images with bounding boxes (`image_*_detected.jpg`) in `captured_images/`. Designed for headless operation.
+The script captures a full-resolution JPEG over USB, runs detection on it, and writes an
+annotated copy next to the original — no monitor or desktop session required.
 
-## Prerequisites
+---
 
-- **Hardware**: Raspberry Pi (4/5, 8GB), Canon 1300D, USB cable, microSD card (32GB+)
-- **Software**: Raspberry Pi OS (64-bit), Python 3.7+, `gphoto2`, Python libraries (`ultralytics`, `opencv-python-headless`, `numpy`)
-- **Network**: Pi and client device on same network, SSH enabled
+## Repository layout
+
+```
+AI_project/
+└── UIT/
+    ├── capture_detect.py     # the whole program (~80 lines)
+    ├── captured_images/      # output: image_*.jpg and image_*_detected.jpg
+    └── AI video.mp4          # 19 MB demo recording
+```
+
+> Note: the code sits inside the `UIT/` subfolder, so every command below is run from
+> `AI_project/UIT`, not from the repository root.
+
+---
+
+## Requirements
+
+**Hardware**
+
+- Raspberry Pi 4 or 5 (8 GB recommended) — or any Linux host with USB
+- Canon EOS 1300D and a USB cable
+- microSD card, 32 GB or larger
+
+**Software**
+
+- Raspberry Pi OS 64-bit (or Debian/Ubuntu)
+- Python 3.8+
+- Python packages: `ultralytics`, `opencv-python-headless`, `numpy`
+
+`opencv-python-headless` is deliberate — there is no display server, so the full OpenCV
+build with GUI support is not needed.
+
+---
 
 ## Setup
 
-1. **Install OS & Update**:
-   ```bash
-   sudo apt-get update
-   sudo apt-get upgrade -y
-   ```
+```bash
+# 1. System packages
+sudo apt update
+sudo apt install -y gphoto2 python3-venv
 
-2. **Install Dependencies**:
-   ```bash
-   sudo apt-get install gphoto2 -y
-   python3 -m venv objdetect_env
-   source objdetect_env/bin/activate
-   pip install ultralytics opencv-python-headless numpy
-   ```
+# 2. Clone and enter the working directory
+git clone https://github.com/UNKNOWN0410/AI_project.git
+cd AI_project/UIT
 
-3. **Configure Camera**:
-   - Connect Canon 1300D via USB, set to Manual mode.
-   - Set to JPEG:
-     ```bash
-     gphoto2 --set-config /main/imgsettings/imageformat=0
-     ```
-     - Or manually: Camera Menu > Image Quality > JPEG (Large/Fine).
-   - Test:
-     ```bash
-     gphoto2 --capture-image-and-download --filename test.jpg
-     rm test.jpg
-     ```
+# 3. Virtual environment
+python3 -m venv objdetect_env
+source objdetect_env/bin/activate
 
-4. **Clone Repository**:
-   ```bash
-   git clone https://github.com/your-username/UIT.git
-   cd UIT
-   ```
+# 4. Python dependencies
+pip install ultralytics opencv-python-headless numpy
+```
+
+### Configure the camera
+
+Connect the 1300D, power it on, and set the mode dial to **Manual (M)**. Detection needs
+JPEG, not RAW:
+
+```bash
+gphoto2 --set-config /main/imgsettings/imageformat=0
+```
+
+If that path is rejected by your firmware, set it on the camera itself:
+**Menu → Image Quality → JPEG (Large/Fine)**.
+
+Confirm the tether works before touching Python:
+
+```bash
+gphoto2 --auto-detect
+gphoto2 --capture-image-and-download --filename test.jpg && rm test.jpg
+```
+
+---
 
 ## Usage
 
-1. **Run Script**:
-   ``` violently
-   source objdetect_env/bin/activate
-   python3 capture_detect.py
-   ```
-   - Press any key to capture, `q` to quit.
-   - Saves images to `captured_images/`.
-
-2. **Transfer Files**:
-   - From a client PC (e.g., Windows PowerShell):
-     ```powershell
-     scp -r pi@<pi-ip>:/home/pi/UIT ~/Downloads
-     ```
-     - Replace `<pi-ip>` with Pi’s IP (`hostname -I`).
-     - Adjust username (`pi`) and path as needed.
-   - Or use FileZilla (SFTP to `<pi-ip>`, port 22).
-
-## Structure
-
+```bash
+source objdetect_env/bin/activate
+python3 capture_detect.py
 ```
-UIT/
-├── capture_detect.py
-├── captured_images/
-│   ├── image_*.jpg
-│   └── image_*_detected.jpg
-└── README.md
+
+The program prompts `Capture image? (q to quit):`
+
+- press **Enter** (or type anything) → grab a frame and run detection
+- type **q** → exit
+
+On first run, Ultralytics downloads `yolov8n.pt` (~6 MB) into the current directory.
+
+> The prompt is line-based `input()`, not a keypress listener, so each capture needs Enter
+> plus a newline. This keeps it usable over SSH without a terminal in raw mode.
+
+### Output
+
+Both files land in `captured_images/`, named by timestamp so captures never overwrite:
+
+| File | Contents |
+|---|---|
+| `image_20260413_141532.jpg` | the original frame from the camera |
+| `image_20260413_141532_detected.jpg` | the same frame with YOLO boxes and class labels |
+
+---
+
+## How it works
+
+1. **Capture** — `gphoto2 --capture-image-and-download` is invoked as a subprocess, writing
+   straight to `captured_images/`. A failed capture is retried up to 3 times with a 2-second
+   delay, since tethered cameras occasionally miss a trigger.
+2. **Load** — the JPEG is read with `cv2.imread()`.
+3. **Detect** — `yolov8n.pt` (COCO, 80 classes) runs inference on the frame.
+4. **Annotate** — `results[0].plot()` renders boxes and labels, and the result is written
+   alongside the original.
+
+`yolov8n` is the nano variant, chosen so inference stays practical on Pi-class CPUs. On a
+Pi 5 you can trade speed for accuracy:
+
+```python
+model = YOLO("yolov8s.pt")   # or yolov8m.pt on a desktop GPU
 ```
+
+---
 
 ## Troubleshooting
 
-- **RAW (`.CR2`) Images**:
-  ```bash
-  gphoto2 --set-config /main/imgsettings/imageformat=0
-  ```
+| Symptom | Cause and fix |
+|---|---|
+| `Could not claim the USB device` | Another process holds the camera. Stop the auto-mounter: `sudo killall gvfs-gphoto2-volume-monitor` and re-plug the camera |
+| `gphoto2: command not found` | `sudo apt install gphoto2` |
+| `gphoto2 --auto-detect` lists nothing | Cable or mode issue — check the camera is on, out of sleep, and not in print/PTP mode |
+| Capture fails all 3 attempts | Card full, camera asleep, or the lens is hunting for focus. Switch to manual focus |
+| `Failed to load image` | gphoto2 wrote a different filename or extension than requested — check what actually landed in `captured_images/` |
+| Detections look wrong or empty | Nano model at full 18 MP resolution detects small objects poorly; downscale the frame before inference |
 
-- **Camera Busy**:
-  ```bash
-  sudo killall gvfsd-gphoto2
-  sudo chmod 666 /dev/bus/usb/*/*
-  ```
+---
 
-- **No Detected Images**:
-  - Verify JPEG capture and YOLO model (`yolov8n.pt`).
-  - Check: `ls captured_images/*_detected.jpg`.
+## Notes and limitations
 
-- **SCP Issues**:
-  - Install OpenSSH: `Add-WindowsCapability -Online -Name OpenSSH.Client~~~~0.0.1.0`
-  - Ensure SSH: `sudo systemctl start ssh`
+- **One frame at a time.** This is a capture-inspect loop, not a live video pipeline. For
+  continuous detection you would need `gphoto2 --capture-movie` with a MJPEG stream.
+- **18 MP is slow.** Each frame is a full-resolution JPEG, so expect roughly 1–3 seconds per
+  detection cycle on a Pi 4.
+- **The demo video is committed in-repo** at 19 MB, which is most of this repository's size.
+  Moving it to a release asset or Git LFS would keep clones fast.
+- **Not unattended.** There is no systemd unit or scheduling; it is an interactive tool.
+
+---
 
 ## License
-MIT License. See [LICENSE](LICENSE).
+
+No license file is included. Add one (MIT is a reasonable default) before treating this as
+reusable code.
